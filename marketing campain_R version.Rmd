@@ -1,0 +1,704 @@
+---
+Capstone Project
+Boost the profit of a marketing campaign_Predicting marketing campaign responses using machine learning models
+03/22/2020
+Sinhwa (Sophie) Kang
+---
+
+
+```{r}
+###DATA IMPORTING###
+r = getOption("repos")
+r["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r)
+
+setwd("C:/Users/shina/Desktop/Sinhwa/Capstone Project/Marketing-campaign")
+
+library(readxl)
+library(readr)
+
+marketing = data.frame(read.csv("marketing_campaign-original.csv", stringsAsFactors = TRUE)) 
+
+marketing.1 = marketing [,-1] #removing ID here
+summary(marketing.1)
+str(marketing.1)
+```
+```{r}
+
+###DATA CLEANING AND PREPARING###
+
+library(Hmisc)#remove this or e1071 if "impute" function doesn't work!
+library(corrplot)
+library(DMwR)
+library(dplyr)
+library(tidyr) #for the missing value - "gather" function
+library(lattice)
+library(ggplot2)
+library(munsell) 
+library(ModelMetrics) 
+library(recipes) 
+library(assertthat) 
+library(bindrcpp) 
+library(glue) 
+library(pkgconfig) 
+library(DEoptimR) 
+library(rattle)
+library(caret)
+
+marketing.1$Education=as.numeric(marketing.1$Education)
+marketing.1$Marital_Status=as.numeric(marketing.1$Marital_Status)
+marketing.1[c(1,2:3)]=sapply(marketing.1[c(1,2:3)], as.numeric)
+str(marketing.1)
+summary(marketing.1)
+```
+
+```{r}
+##Date management## 
+
+library(lubridate)
+
+##Convert a date to numeric
+
+marketing.1$Dt_Customer <- mdy(marketing.1$Dt_Customer) #convert a variable to the one with a date
+class(marketing.1$Dt_Customer)
+#The “Date” class means dates are stored as the number of days since 01/01/1970, with negative values for earlier dates. Thus greater numbers indicate customers enrolled with the company more recently.
+
+marketing.1$Dt_Customer <- as.numeric(marketing.1$Dt_Customer) #displaying the number of days since 01/01/1970. 
+class(marketing.1$Dt_Customer)
+```
+
+```{r}
+#Remove "z_CostContact" and "Z_Revenue" that have only one number in each variable
+marketing.2=marketing.1[,-c(26:27)] 
+str(marketing.2)
+```
+
+```{r}
+#Compute the numeric summary of the missingness (missing_pct: missing percentage)!
+missing_values <- marketing.2 %>% summarize_all(funs(sum(is.na(.))/n()))
+
+missing_values <- gather(missing_values, key="feature", value="missing_pct")
+missing_values %>% 
+  ggplot(aes(x=reorder(feature,-missing_pct),y=missing_pct)) +
+  geom_bar(stat="identity",fill="red")+
+  coord_flip()+theme_bw()
+
+missing_summary = filter(missing_values, missing_pct<0.25) #display in missing_summary if missing values rate is smaller than 25%
+```
+
+```{r}
+##replace NA with median
+#marketing.2$Income=impute(marketing.2$Income, median) 
+#marketing.2$Income=cor(marketing.2$Income, use="complete.obs") ## use="complete.obs" handle missing value: Usually calculate the mean of all data to handle "missing data", but not for period related correlation (for this, calculate the mean for corresponding period data only)!  
+marketing.2[is.na(marketing.2)] = 51382 
+#Since "impute" function is not working well, I'm using "is.na" function to replace the missing value of Income with 51382 that is the median of Income that only has missing values.
+str(marketing.2)
+summary(marketing.2)
+```
+```{r}
+corrplot(cor(marketing.2), type= "lower", method="number") 
+#Correlation including Y
+#use="complete.obs" handle missing value: Usually calculate the mean of all data to handle "missing data", but not for period related correlation (for this, calculate the mean for corresponding period data only)!
+```
+
+
+```{r}
+
+marketing.2$Year_Birth=as.numeric(marketing.2$Year_Birth)
+marketing.2$Education=as.factor(marketing.2$Education)
+marketing.2$Marital_Status=as.factor(marketing.2$Marital_Status)
+marketing.2$Complain=factor(ifelse(marketing.2$Complain==1, "1", "0"))
+marketing.2$AcceptedCmp1=factor(ifelse(marketing.2$AcceptedCmp1==1, "1", "0"))
+marketing.2$AcceptedCmp2=factor(ifelse(marketing.2$AcceptedCmp2==1, "1", "0"))
+marketing.2$AcceptedCmp3=factor(ifelse(marketing.2$AcceptedCmp3==1, "1", "0"))
+marketing.2$AcceptedCmp4=factor(ifelse(marketing.2$AcceptedCmp4==1, "1", "0"))
+marketing.2$AcceptedCmp5=factor(ifelse(marketing.2$AcceptedCmp5==1, "1", "0"))
+marketing.2$Response=factor(ifelse(marketing.2$Response==1, "1", "0"))
+#marketing.2[c(1,2:3)]=sapply(marketing.2[c(1,2:3)], as.factor) #Education, Marital_Status
+#marketing.2[c(1,25:26)]=sapply(marketing.2[c(1,25:26)], as.factor) #Complain, Response
+str(marketing.2)
+table(marketing.2$Teenhome)
+table(marketing.2$Kidhome)
+
+```
+
+```{r}
+
+###PREPARING PREDICTORS###
+
+##REGSUBSETS##
+
+
+library(DMwR)
+library(leaps) #for the regsubset function
+
+
+## Find good predictors using regsubsets function
+reg1r=regsubsets(Response~.,marketing.2, nvmax=25) #with 25 predictors
+summary(reg1r)
+
+```
+
+```{r}
+reg1r.sum=summary(reg1r) # we see that the adjusted R-squared statistic increases from 11%, when only one variable is included in the model, to almost 33%, when all variables are included. As expected, the adjusted R-squared statistic increases monotonically as more variables are included.  
+names(reg1r.sum)
+
+reg1r.sum$rsq
+reg1r.sum$adjr2
+which.max(reg1r.sum$adjr2) #19
+which.min(reg1r.sum$cp) #18
+which.min(reg1r.sum$bic) #16 (16 variables are suggested)
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(reg1r.sum$rss,xlab="Number of Variables",ylab="RSS") #RSS: Residual Sum Of Squares
+plot(reg1r.sum$adjr2,xlab="Number of Variables",ylab="Adjusted RSq")
+points (19,reg1r.sum$adjr2[19], col="red",cex=2,pch=20) # points() command works like the plot() command, except that it puts points on a plot that has already been created, instead of creating a new plot. Here we plot a red dot to indicate the model with the largest adjusted R-squared statistic that turns out to be 19 above. 
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(reg1r.sum$cp,xlab="Number of Variables",ylab="Cp")
+points (18,reg1r.sum$cp[18], col="red",cex=2,pch=20)
+```
+
+```{r}
+plot(reg1r.sum$bic,xlab="Number of Variables",ylab="BIC")
+which.min(reg1r.sum$bic) #16
+points (16,reg1r.sum$bic[16], col="red",cex=2,pch=20)
+```
+
+```{r}
+?plot.regsubsets #Type this to find out more about this function
+# We can find the selected variables for the best model with a given number of predictors by creating the plots below.
+plot(reg1r,scale="r2")
+plot(reg1r,scale="adjr2")
+plot(reg1r,scale="Cp")
+plot(reg1r,scale="bic")
+```
+
+```{r}
+coef(reg1r,16)
+```
+
+```{r}
+#Stepwise is explored below, but some say the function is not good for Logistic Regression.
+reg1.stepforw=regsubsets(Response~.,marketing.2, nvmax=25, method="forward")
+reg1f=summary(reg1.stepforw)
+reg1f$rsq
+reg1f$adjr2
+which.max(reg1f$adjr2) #21
+which.min(reg1f$cp) #19
+which.min(reg1f$bic) #17
+
+plot(reg1.stepforw,scale="r2")
+plot(reg1.stepforw,scale="adjr2")
+plot(reg1.stepforw,scale="Cp")
+plot(reg1.stepforw,scale="bic")
+```
+
+```{r}
+coef(reg1.stepforw,17)
+```
+
+```{r}
+reg1.stepback=regsubsets(Response~.,marketing.2, nvmax=25, method="backward")
+reg1b=summary(reg1.stepback)
+reg1b$rsq
+reg1b$adjr2
+which.max(reg1b$adjr2) #19
+which.min(reg1b$cp) #18
+which.min(reg1b$bic) #16
+
+plot(reg1.stepback,scale="r2")
+plot(reg1.stepback,scale="adjr2")
+plot(reg1.stepback,scale="Cp")
+plot(reg1.stepback,scale="bic")
+```
+
+```{r}
+coef(reg1.stepback,16)
+```
+
+```{r}
+
+##Choosing among the models of different sizes using the validation set approach and cross-validation using Full Regsubsets
+
+#To compute the validation set error for the best model of each model size, i needed to change all variables from factors to numerics. Otherwise, the output keeps showing errors: "not meaningful for factors".
+marketing.2$Education=as.numeric(marketing.2$Education)
+marketing.2$Marital_Status=as.numeric(marketing.2$Marital_Status)
+marketing.2$Complain=as.numeric(marketing.2$Complain)
+marketing.2$AcceptedCmp1=as.numeric(marketing.2$AcceptedCmp1)
+marketing.2$AcceptedCmp2=as.numeric(marketing.2$AcceptedCmp2)
+marketing.2$AcceptedCmp3=as.numeric(marketing.2$AcceptedCmp3)
+marketing.2$AcceptedCmp4=as.numeric(marketing.2$AcceptedCmp4)
+marketing.2$AcceptedCmp5=as.numeric(marketing.2$AcceptedCmp5)
+marketing.2$Response=as.numeric(marketing.2$Response)
+
+set.seed (1)
+train=sample(c(TRUE,FALSE), nrow(marketing.2),rep=TRUE)
+test=(!train)
+regfit.train=regsubsets(Response~.,data=marketing.2[train,],nvmax=25)
+
+test.mat=model.matrix(Response~.,data=marketing.2[test,])
+
+val.errors=rep(NA,25)
+for(i in 1:25){
+  coefi=coef(regfit.train,id=i)
+  pred=test.mat[,names(coefi)]%*%coefi
+  val.errors[i]=mean((marketing.2$Response[test]-pred)^2)
+}
+
+val.errors
+which.min(val.errors) #shows that the best model is the one that contains 13 variables
+```
+
+```{r}
+coef(regfit.train,13)
+```
+
+```{r}
+#perform best subset selection on the full data set, and select the best 16-variable model. It is important that we make use of the full data set in order to obtain more accurate coefficient estimates.......because the best 16-variable model on the full data set may differ from the corresponding model on the training set.
+
+regfit.full=regsubsets(Response~.,data=marketing.2,nvmax=25)
+
+coef(regfit.full,16)
+
+```
+
+```{r}
+#We see that the best 16-variable model on the full data set has a different set of variables than the best 16-variable model on the training set. We now try to choose among the models of different sizes using crossvalidation. For this, we must perform best subset selection within each of the k training sets.
+
+k=10 #Creating a vector that allocates each observation to one of k = 10 fold.
+set.seed(1)
+folds=sample(1:k,nrow(marketing.2),replace=TRUE)
+cv.errors=matrix(NA,k,25, dimnames=list(NULL, paste(1:25)))#creating a matrix in which the results will be stored.
+
+#my own new predict method
+predict.regsubsets =function (object ,newdata ,id,...){ 
+  form=as.formula (object$call [[2]]) 
+  mat=model.matrix(form ,newdata ) 
+  coefi=coef(object ,id=id) 
+  xvars=names(coefi) 
+  mat[,xvars]%*%coefi 
+  }
+
+#Write a for loop that performs cross-validation. In the jth fold, the elements of folds that equal j are in the test set, and the remainder are in the training set. We make our predictions for each model size (using my own new predict() method above), compute the test errors on the appropriate subset, and store them in the appropriate slot in the matrix cv.errors.
+for(j in 1:k){
+  best.fit=regsubsets(Response~.,data=marketing.2[folds!=j,],
+                      nvmax=25)
+  for(i in 1:25){
+    pred=predict.regsubsets(best.fit,marketing.2[folds==j,],id=i)
+    cv.errors[j,i]=mean((marketing.2$Response[folds==j]-pred)^2)
+  }
+}
+#This has given us a 10×25 matrix, of which the (i,j)th element corresponds to the test MSE for the ith cross-validation fold for the best j-variable model. 
+
+#Use the apply() function to average over the columns of this apply() matrix in order to obtain a vector for which the jth element is the crossvalidation error for the j-variable model.
+mean.cv.errors=apply(cv.errors ,2,mean)
+mean.cv.errors
+
+par(mfrow=c(1,1)) 
+plot(mean.cv.errors,type="b") #Showing that cross-validation selects a final 13-variable model (with the smallest cv.errors for the 13th variable. 
+
+```
+
+```{r}
+
+#Now perform best subset selection on the full data set in order to obtain the 13-variable model. 
+reg.best=regsubsets (Response∼.,data=marketing.2 , nvmax=25)
+coef(reg.best,13)
+
+```
+
+
+```{r}
+
+
+##LOGISTIC REGRESSSION##
+
+##One-hot enconding: Dummy coding to display the 16 variables selected by Full Regsubsets
+marketing.2$Education2_Basic=factor(ifelse(marketing.2$Education==2, "1", "0"))
+marketing.2$Education5_Master=factor(ifelse(marketing.2$Education==5, "1", "0"))
+marketing.2$Marital_Status4_Married=factor(ifelse(marketing.2$Marital_Status==4, "1", "0"))
+marketing.2$Marital_Status6_Together=factor(ifelse(marketing.2$Marital_Status==6, "1", "0"))
+
+#getting back other variables from numeric (for the validation set approach and cross-validation) to factor
+marketing.2$Education=as.factor(marketing.2$Education)
+marketing.2$Marital_Status=as.factor(marketing.2$Marital_Status)
+marketing.2$Complain=factor(ifelse(marketing.2$Complain==1, "1", "0"))
+marketing.2$AcceptedCmp1=factor(ifelse(marketing.2$AcceptedCmp1==1, "1", "0"))
+marketing.2$AcceptedCmp2=factor(ifelse(marketing.2$AcceptedCmp2==1, "1", "0"))
+marketing.2$AcceptedCmp3=factor(ifelse(marketing.2$AcceptedCmp3==1, "1", "0"))
+marketing.2$AcceptedCmp4=factor(ifelse(marketing.2$AcceptedCmp4==1, "1", "0"))
+marketing.2$AcceptedCmp5=factor(ifelse(marketing.2$AcceptedCmp5==1, "1", "0"))
+marketing.2$Response=factor(ifelse(marketing.2$Response==1, "1", "0"))
+
+str(marketing.2)
+
+```
+
+```{r}
+## Full in-sample check
+
+# 13 variables chosen by the validation set and cross-validation error approach
+glm1.ValidationSetCrossValidation = glm(Response~ Education + Teenhome + Dt_Customer + Recency + MntMeatProducts + NumDealsPurchases + NumWebPurchases + NumStorePurchases + AcceptedCmp3 + AcceptedCmp4 + AcceptedCmp5 + AcceptedCmp1 + AcceptedCmp2 , marketing.2, family="binomial")
+summary(glm1.ValidationSetCrossValidation) #AIC: 1237.7 
+
+# 16 variables filtered by the Full Regsubsets that needed one-hot encoding (dummy coding)
+glm2.FullRegsubsets = glm(Response~ Education2_Basic + Education5_Master + Marital_Status4_Married + Marital_Status6_Together + Teenhome + Dt_Customer + Recency + MntMeatProducts + NumDealsPurchases + NumStorePurchases + NumWebPurchases + AcceptedCmp5 + AcceptedCmp4 + AcceptedCmp3 + AcceptedCmp2 + AcceptedCmp1, marketing.2, family="binomial")
+summary(glm2.FullRegsubsets)  # AIC: 1173 that is the best so far! (Here i included only Full Regsubsets filtered variables by including some sub variables (i.e. Marital_Status4, AcceptedCmp11, etc.) that used dummy coding) 
+
+# All 25 variables
+glm3.AllVariables = glm(Response~ Year_Birth + Education + Marital_Status + Income + Kidhome + Teenhome + Dt_Customer + Recency + Complain + AcceptedCmp1 + AcceptedCmp2 + AcceptedCmp3 + AcceptedCmp4 + AcceptedCmp5 + NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases + NumWebVisitsMonth + MntWines + MntFruits + MntMeatProducts + MntFishProducts + MntSweetProducts + MntGoldProds, marketing.2, family="binomial")
+summary(glm3.AllVariables)  # AIC: 1189.3 
+
+# All 20 variables
+#glm4.20Variables = glm(Response~ Year_Birth + Education + Marital_Status + Income + Kidhome + Teenhome + Dt_Customer + Recency + Complain + NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases + NumWebVisitsMonth + MntWines + MntFruits + MntMeatProducts + MntFishProducts + MntSweetProducts + MntGoldProds, marketing.2, family="binomial")
+#summary(glm4.20Variables) #AIC: 1413.9
+
+# All 19 variables
+#glm4.19Variables = glm(Response~ Year_Birth + Education + Marital_Status + Income + Kidhome + Teenhome + Dt_Customer + Recency + Complain + NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases + NumWebVisitsMonth + AcceptedCmp1 + AcceptedCmp2 + AcceptedCmp3 + AcceptedCmp4 + AcceptedCmp5, marketing.2, family="binomial")
+#summary(glm4.19Variables) #AIC: 1198.3
+
+# All 14 variables
+#glm5.14Variables = glm(Response~ Year_Birth + Education + Marital_Status + Income + Kidhome + Teenhome + Dt_Customer + Recency + Complain + NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases + NumWebVisitsMonth, marketing.2, family="binomial")
+#summary(glm5.14Variables)  #AIC: 1462.6
+
+
+```
+
+```{r}
+
+##cross validation error for glm models
+     
+library(neuralnet) 
+library(boot)
+
+str(marketing.2)
+
+cv.error1=cv.glm(marketing.2,glm1.ValidationSetCrossValidation,K=10)$delta[1]
+cv.error2=cv.glm(marketing.2,glm2.FullRegsubsets,K=10)$delta[1]
+cv.error3=cv.glm(marketing.2,glm3.AllVariables,K=10)$delta[1]
+
+cv.error1;cv.error2;cv.error3 
+#The lowest is the best that is cv.error2 for glm2.FullRegsubsets!
+```
+
+```{r}
+
+##glm prediction
+
+marketing.3=marketing.2[-c(1:5,9:10,12:14,17,19,25)]
+summary(marketing.3)
+
+pred.glm = predict(glm2.FullRegsubsets, type = "response", marketing.3)
+summary(pred.glm)
+```
+
+```{r}
+
+####10-FOLD CROSS-VALIDATION###
+
+library(DMwR) #data mining with R
+library(caret) #provides a number of methods to estimate the accuracy of a machines learning algorithm.
+library(lattice) #provides better defaults and the ability to easily display multivariate relationships for R graphics.
+library(e1071) #includes a built-in function, tune(), to perform crossvalidation.
+library(ggplot2)
+library(rattle) #a popular GUI for data mining using R.
+
+control <- trainControl(method="cv", number=10)
+metric <- "Accuracy"
+
+
+# Linear Discriminant Analysis (LDA)
+set.seed(99)
+fit.lda <- train(Response~., data=marketing.3, method="lda", metric=metric, trControl=control)
+
+# Classfication and Regression Trees (CART)
+set.seed(99)
+fit.cart <- train(Response~., data=marketing.3, method="rpart", metric=metric, trControl=control)
+
+# k-Nearest Neighbors (KNN)
+set.seed(99)
+fit.knn <- train(Response~., data=marketing.3, method="knn", metric=metric, trControl=control)
+
+# Bayesian Generalized Linear Model - Logistic Regression
+set.seed(99)
+fit.logi <- train(Response~., data=marketing.3, method="bayesglm", metric=metric, trControl=control)
+
+# Support Vector Machines (SVM)
+set.seed(99)
+fit.svm <- train(Response~., data=marketing.3, method="svmRadial", metric=metric, trControl=control)
+
+# Random Forest
+set.seed(99)
+fit.rf <- train(Response~., data=marketing.3, method="rf", metric=metric, trControl=control)
+
+# Gradient Boosting Machines/XGBoost-Linear Model
+set.seed(99)
+fit.xgb.l <- train(Response~., data=marketing.3, method="xgbLinear", metric=metric, trControl=control)
+
+# Gradient Boosting Machines/XGBoost-Tree Model 
+set.seed(99)
+fit.xgb.t <- train(Response~., data=marketing.3, method="xgbTree", metric=metric, trControl=control)
+
+# Select Best Model
+# summarize accuracy of models
+results <- resamples(list(lda=fit.lda, cart=fit.cart, knn=fit.knn, logi=fit.logi, svm=fit.svm, rf=fit.rf, xgb.l=fit.xgb.l, xgb.t=fit.xgb.t))
+summary(results) 
+
+# Summarize the Best Model
+print(fit.xgb.t)
+#Accuracy: 0.9102851
+#Kappa: 0.5919453
+```
+
+```{r}
+
+####MACHINE LEARNING PREDICTION###
+
+library(readxl)   
+library(dplyr) #provides a set of tools for efficiently manipulating datasets and installed as part of Tidyverse collection of R packages.
+library(corrplot)
+library(corrplot)
+library(ggplot2)
+library(caret)
+library(pROC) #Tools for visualizing, smoothing and comparing receiver operating characteristic (ROC curves).
+
+## creating train and test sets: 
+
+set.seed(1)
+part <- createDataPartition(marketing.3$Response, p=0.70, list=F) #get the numb 70/30 training test split
+trainset <- marketing.3[part,]
+testset <- marketing.3[-part,]
+#Alternative way: 
+#train=sample(c(TRUE,FALSE), nrow(marketing.2),rep=TRUE)
+#test=(!train)
+#Alternative way
+#numberOfTrainingSamples = round(length(marketing.2) * .7)
+dim(trainset)
+dim(testset)
+```
+
+```{r}
+## Testset Prediction 
+# Test set accuracy
+
+pred.ml = predict(fit.xgb.t, newdata=testset)
+mean(testset$Response==marketing.3$Response)  
+mean(pred.ml) 
+table(pred.ml,testset$Response)
+table(trainset$Response)
+table(testset$Response)
+#Accuracy = (TN+TP)/ (TN+FP+FN+TP); Error rate= 1-accuracy
+#Test set accuracy: 94%
+
+```
+
+```{r}
+####ROC (AUC) and OPTIMAL CUTOFF POINT (THRESHOLD)###
+
+library(pROC)
+library(ROCR)
+
+## ROC and AUC
+pred = predict(fit.xgb.t, type = "prob", trainset) # The simplest way is to use a "train" dataset (by Dr. Yu).
+pred.1 = as.numeric(pred[,2])
+xgb.roc = roc(response = trainset$Response, predictor = pred.1)
+plot(xgb.roc, legacy.axes = TRUE, print.auc.y = 0.8, print.auc = TRUE) #AUC: 0.965
+coords(xgb.roc, "best", "threshold", transpose = TRUE) 
+
+```
+
+
+
+```{r}
+# In seach of a better threshold
+
+str(pred)
+str(pred.1)
+
+# Threshold = 0.5
+pred_response = factor(ifelse(pred.1 >=0.5, "1", "0"))
+real_response = factor(ifelse(trainset$Response==1, "1","0"))
+confusionMatrix(pred_response, real_response)
+
+```
+
+```{r}
+
+  #Create a plot for the best threshold.
+  conf1=confusionMatrix(pred_response, real_response, positive = "1")
+  conf1$overall[1] #Accuracy
+  conf1$byClass[1] #Sensitivity
+  conf1$byClass[2] #Specificity
+  
+   perform_fn <- function(cutoff) 
+  {
+    pred_response <- factor(ifelse(pred.1 >= cutoff, "1", "0"))
+    conf1 <- confusionMatrix(pred_response, real_response, positive = "1")
+    accuracy <- conf1$overall[1]
+    sensitivity <- conf1$byClass[1]
+    specificity <- conf1$byClass[2]
+    out <- t(as.matrix(c(sensitivity, specificity, accuracy))) 
+    colnames(out) <- c("sensitivity", "specificity", "accuracy")
+    return(out)
+  }
+   
+   s = seq(0.01,0.99,length=671)
+  OUT = matrix(0,671,3)
+  
+  for(i in 1:671)
+  {
+    OUT[i,] = perform_fn(s[i])
+  } 
+  
+  plot(s, OUT[,1],xlab="Cutoff",ylab="Value",cex.lab=1.5,cex.axis=1.5,ylim=c(0,1),
+     type="l",lwd=3,axes=FALSE,col=2)
+axis(1,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+axis(2,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+lines(s,OUT[,2],col="darkgreen",lwd=3)
+lines(s,OUT[,3],col=4,lwd=3)
+box()
+legend("right",col=c(2,"darkgreen",4,"darkred"),text.font =3,inset = 0.02,
+       box.lty=0,cex = 0.8, 
+       lwd=c(2,2,2,2),c("Sensitivity","Specificity","Accuracy"))
+abline(v = 0.75, col="black", lwd=2, lty=2)
+axis(1, at = seq(0.1, 1, by = 0.1))
+grid()
+```
+
+```{r}
+
+##XGBoost prediction##
+
+library(xgboost) 
+
+ResponseLabels = data.matrix(marketing.3 %>% select(Response))
+ResponseLabels = factor(ifelse(ResponseLabels==1, "1", "0"))
+
+marketing.3_matrix = data.matrix(marketing.3 [,-13])
+
+# get the numb 70/30 train and test split
+numberOfTrainingSamples = round(length(ResponseLabels) * .7)
+
+# training data
+train_data = marketing.3_matrix[1:numberOfTrainingSamples,]
+train_labels = ResponseLabels[1:numberOfTrainingSamples]
+
+# testing data
+test_data = marketing.3_matrix[-(1:numberOfTrainingSamples),]
+test_labels = ResponseLabels[-(1:numberOfTrainingSamples)]
+
+# put our testing & training data into two seperates Dmatrixs objects
+dtrain = xgb.DMatrix(data = train_data, label= train_labels)
+dtest = xgb.DMatrix(data = test_data, label= test_labels)
+
+```
+
+```{r}
+
+## Train and test the model
+
+model = xgboost(data = dtrain, nround = 2)  
+
+# generate predictions for my held-out testing data
+pred = predict(model, dtest)
+
+# get & print the classification error
+err = mean(as.numeric(pred > 0.75) != test_labels)
+print(paste("test-error=", err)) #test-error = 0.818452380952381 
+
+# plot the features! What's contributing most to my model?
+install.packages("visNetwork")
+install.packages("DiagrammeR")
+xgb.plot.multi.trees(feature_names = names(marketing.3_matrix), model = model)
+```
+
+```{r}
+
+# get information on how important each feature is ... 
+importance_matrix <- xgb.importance(names(marketing.3_matrix), model = model)
+xgb.plot.importance(importance_matrix)
+
+```
+
+```{r}
+
+###Exploratory Data Analysis (EDA)###
+
+# Histogram: Response against numeric variables 
+marketing.2 %>% 
+  group_by(Response) %>% 
+  summarise(Count = n())%>% 
+  mutate(percent = prop.table(Count)*100)%>%
+  ggplot(aes(reorder(Response, -percent), percent), fill = Response)+
+  geom_col(fill = c("red", "blue"))+
+  geom_text(aes(label = sprintf("%.1f%%", percent)), hjust = 0.2, vjust = 2, size = 5)+ 
+  theme_bw()+  
+  xlab("Response (0:No, 1:Yes)") + ylab("Percent") + ggtitle("Response Percent")
+
+ggplot(marketing.2, aes(x = Year_Birth)) + geom_histogram(fill=c("green"))
+ggplot(marketing.2, aes(x = Income)) + geom_histogram(fill=c("light blue"))
+#ggplot(marketing.2, aes(x = Dt_Customer)) + geom_histogram()
+marketing.2$Education=as.numeric(marketing.2$Education)
+ggplot(marketing.2, aes(x = Education)) + geom_histogram(fill=c("orange"))
+marketing.2$Marital_Status=as.numeric(marketing.2$Marital_Status)
+ggplot(marketing.2, aes(x = Marital_Status)) + geom_histogram(fill=c("blue"))
+```
+
+
+```{r}
+
+# Bar graphs: Response against catergorial variables
+ggplot(marketing.2, aes(x=Education,fill=Response))+ geom_bar()+ theme_bw() #2n Cycle, Basic, Graduation, Master, PhD
+ggplot(marketing.2, aes(x=Marital_Status,fill=Response))+ geom_bar()+ theme_bw() #Unkown (Absurd), Alone, Divorce, Married, Single, Together, Widow, Other
+ggplot(marketing.2, aes(x=Complain,fill=Response))+ geom_bar()+ theme_bw() 
+
+ggplot(marketing.2, aes(x=AcceptedCmp1,fill=Response))+ geom_bar()+ theme_bw() 
+ggplot(marketing.2, aes(x=AcceptedCmp2,fill=Response))+ geom_bar()+ theme_bw() 
+ggplot(marketing.2, aes(x=AcceptedCmp3,fill=Response))+ geom_bar()+ theme_bw() 
+ggplot(marketing.2, aes(x=AcceptedCmp4,fill=Response))+ geom_bar()+ theme_bw() 
+ggplot(marketing.2, aes(x=AcceptedCmp5,fill=Response))+ geom_bar()+ theme_bw() 
+
+```
+
+```{r}
+# Violin shape graphs: Response against numeric variables 
+ggplot(marketing.2, aes(x=Response, y=Year_Birth, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="Age")
+ggplot(marketing.2, aes(x=Response, y=Income, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="Income")
+ggplot(marketing.2, aes(x=Response, y=Kidhome, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of kids at home ")
+ggplot(marketing.2, aes(x=Response, y=Teenhome, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of teens at home")
+ggplot(marketing.2, aes(x=Response, y=Dt_Customer, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The date of customers' enrollment with the company")
+ggplot(marketing.2, aes(x=Response, y=Recency, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of days since the last purchase")
+ggplot(marketing.2, aes(x=Response, y=NumDealsPurchases, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of purchases made with discount")
+ggplot(marketing.2, aes(x=Response, y=NumWebPurchases, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of purchases made using catalogue")
+ggplot(marketing.2, aes(x=Response, y=NumStorePurchases, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of purchases made directly in stores")
+ggplot(marketing.2, aes(x=Response, y=NumWebVisitsMonth, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of purchases made through company’s web site")
+
+ggplot(marketing.2, aes(x=Response, y=MntWines, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The Amount spent on wine products in the last 2 years")
+ggplot(marketing.2, aes(x=Response, y=MntFruits, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The amount spent on meat products in the last 2 years")
+ggplot(marketing.2, aes(x=Response, y=MntMeatProducts, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The number of purchases made using catalogue")
+ggplot(marketing.2, aes(x=Response, y=MntFishProducts, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The amount spent on fish products in the last 2 years")
+ggplot(marketing.2, aes(x=Response, y=MntSweetProducts, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The amount spent on sweet products in the last 2 years")
+ggplot(marketing.2, aes(x=Response, y=MntGoldProds, fill=Response)) + geom_violin()+
+  geom_boxplot(width=0.1, fill="white") + labs(title="The amount spent on gold products in the last 2 years")
+
+```
